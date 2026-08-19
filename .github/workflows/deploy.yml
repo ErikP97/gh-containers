@@ -25,8 +25,9 @@ jobs:
         uses: actions/cache@v6
         with:
           path: node_modules
-          key: ${{ env.CACHE_KEY }}-${{ hashFiles('**/package-lock.json') }}
+          key: deps-node-modules-${{ hashFiles('**/package-lock.json') }}
       - name: Install dependencies
+        # Only install if cache miss (optimization to skip reinstall on cache hit)
         if: steps.cache.outputs.cache-hit != 'true'
         run: npm ci
       - name: Run server
