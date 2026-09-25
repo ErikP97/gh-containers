@@ -3,11 +3,8 @@
 # Use case: Test Node.js application with MongoDB database in isolated container environment
 name: Build container
 on:
-  push:
-    branches:
-      - main  # Trigger on push to main branch
-      - dev   # Trigger on push to dev branch
-      - docker-build-action # Trigger on push
+    release:
+      types: [released]
 
 permissions:
   contents: 'read'
