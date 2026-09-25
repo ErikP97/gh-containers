@@ -1,75 +1,41 @@
 # GitHub Actions workflow demonstrating Docker containers and MongoDB service integration
 # Demonstrates: container execution, service containers, environment variables, caching, and job dependencies
 # Use case: Test Node.js application with MongoDB database in isolated container environment
-name: Deployment (Container)
+name: Build container
 on:
   push:
     branches:
       - main  # Trigger on push to main branch
       - dev   # Trigger on push to dev branch
+      - docker-build-action # Trigger on push
 
-# Workflow-level environment variables shared across all jobs
-env:
-  CACHE_KEY: node-deps
-  MONGODB_DB_NAME: gha-demo
+permissions:
+  contents: 'read'
+  packages: 'write'
 
 jobs:
-  # Test job - runs application tests in a containerized Node.js environment with MongoDB
-  test:
-    environment: testing  # Uses 'testing' environment protection rules from repo settings
+  build:
     runs-on: ubuntu-latest
-    # Container configuration - entire job runs inside this Docker image
-    container:
-      image: node:24  # Official Node.js v24 Docker image as the main execution environment
-    # Job-specific environment variables for MongoDB connectivity
-    env:
-      MONGODB_CONNECTION_PROTOCOL: mongodb
-      MONGODB_CLUSTER_ADDRESS: mongodb  # Hostname of the service container below
-      MONGODB_USERNAME: root
-      MONGODB_PASSWORD: toor
-      PORT: 8080
-    # Service containers - additional Docker containers network-accessible to the main container
-    services:
-      mongodb:
-        image: mongo:latest  # Official MongoDB Docker image as a service
-        # MongoDB initialization variables - sets up root credentials on startup
-        env:
-          MONGO_INITDB_ROOT_USERNAME: root
-          MONGO_INITDB_ROOT_PASSWORD: toor
     steps:
-      - name: Get Code
+      - name: Get code
         uses: actions/checkout@v7
-      - name: Cache dependencies
-        id: cache  # Step ID allows checking if cache hit or miss
-        uses: actions/cache@v6
-        with:
-          path: node_modules
-          key: deps-node-modules-${{ hashFiles('**/package-lock.json') }}
-      - name: Install dependencies
-        # Only install if cache miss (optimization to skip reinstall on cache hit)
-        if: steps.cache.outputs.cache-hit != 'true'
-        run: npm ci
-      - name: Run server
-        # Starts application server in background (&) and waits for it to be ready on port 8080
-        run: npm start & npx wait-on http://127.0.0.1:$PORT
-      - name: Run tests
-        # Executes test suite with server running and MongoDB accessible
-        run: npm test
-      - name: Output information
-        # Verifies MongoDB credentials were properly set in the container environment
-        run: |
-          echo "MONGODB_USERNAME: $MONGODB_USERNAME"
 
-  # Deploy job - runs after test succeeds (does not use container)
-  deploy:
-    needs: test  # Waits for test job to complete successfully before running
-    runs-on: ubuntu-latest  # Runs directly on Ubuntu runner (not in a container)
-    steps:
-      - name: Output information
-        # Job-specific environment variable scoped to this step
-        env:
-          PORT: 3000
-        run: |
-          echo "MONGODB_DB_NAME: $MONGODB_DB_NAME"  # From workflow-level env
-          echo "MONGODB_USERNAME: $MONGODB_USERNAME"  # From GitHub secrets or parent env
-          echo "${{ env.PORT }}"  # From job-level env
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Log in to Github container registry
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Lowercase the repo name
+        run: echo "REPO=${GITHUB_REPOSITORY,,}" >>${GITHUB_ENV}
+
+      - name: Build and push container image to registry
+        uses: docker/build-push-action@v7
+        with:
+          push: true
+          tags: ghcr.io/${{ env.REPO }}:${{ github.sha }}
+          file: ./Dockerfile
