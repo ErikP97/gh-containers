@@ -2,6 +2,7 @@
 #
 # Phase 1: build container image(s) only. Nothing is pushed anywhere.
 # Phase 2 (once you have Entra ID / Azure permissions): see the "PHASE 2" markers.
+#
 
 name: Build container image
 
