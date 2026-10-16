@@ -1,38 +1,86 @@
-# GitHub Actions workflow demonstrating Docker containers and MongoDB service integration
-# Demonstrates: container execution, service containers, environment variables, caching, and job dependencies
-# Use case: Test Node.js application with MongoDB database in isolated container environment
-name: Build container
+# Place at: .github/workflows/build-image.yml
+#
+# Phase 1: build container image(s) only. Nothing is pushed anywhere.
+# Phase 2 (once you have Entra ID / Azure permissions): see the "PHASE 2" markers.
+#
+
+name: Build container image
+
 on:
-    release:
-      types: [released]
+  push:
+    # branches: [build-docker]
+    tags: ["v*.*.*"]
 
 permissions:
-  contents: 'read'
-  packages: 'write'
+  contents: read
+  # PHASE 2: add "id-token: write" for OIDC login to Azure
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   build:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # --- Repo with a single Dockerfile in the root: keep only this entry ---
+          - name: app
+            context: .
+            dockerfile: ./Dockerfile
+
+          # --- Repo with frontend/backend: delete the entry above, use these ---
+          # - name: frontend
+          #   context: ./frontend
+          #   dockerfile: ./frontend/Dockerfile
+          # - name: backend
+          #   context: ./backend
+          #   dockerfile: ./backend/Dockerfile
+
     steps:
-      - name: Get code
-        uses: actions/checkout@v7
+      - name: Checkout
+        uses: actions/checkout@v4
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v4
+        uses: docker/setup-buildx-action@v3
 
-      - name: Log in to Github container registry
-        uses: docker/login-action@v4
+      # Tag/label computation. Image name is lowercase repo + matrix name,
+      # e.g. "myorg/mywebapp-frontend". Not pushed yet, only used locally.
+      - name: Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
         with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          images: ${{ github.repository }}-${{ matrix.name }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=sha,format=short
+            type=raw,value=latest,enable={{is_default_branch}}
 
-      - name: Lowercase the repo name
-        run: echo "REPO=${GITHUB_REPOSITORY,,}" >>${GITHUB_ENV}
+      # PHASE 2: log in to Azure + ACR here, e.g.
+      # - uses: azure/login@v2
+      #   with:
+      #     client-id: ${{ secrets.AZURE_CLIENT_ID }}
+      #     tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+      #     subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      # - run: az acr login --name <your-acr>
 
-      - name: Build and push container image to registry
-        uses: docker/build-push-action@v7
+      - name: Build image (no push)
+        uses: docker/build-push-action@v6
         with:
-          push: true
-          tags: ghcr.io/${{ env.REPO }}:${{ github.sha }}
-          file: ./Dockerfile
+          context: ${{ matrix.context }}
+          file: ${{ matrix.dockerfile }}
+          push: false        # PHASE 2: change to true and prefix images with <acr>.azurecr.io/
+          load: true         # keeps the image in the runner so it can be smoke-tested
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=${{ matrix.name }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.name }}
+
+      # PHASE 2: deploy step, e.g.
+      # - uses: azure/container-apps-deploy-action@v2
+      #   with:
+      #     imageToDeploy: <acr>.azurecr.io/<image>:${{ github.sha }}
+      #     resourceGroup: <rg>
+      #     containerAppName: <app>
