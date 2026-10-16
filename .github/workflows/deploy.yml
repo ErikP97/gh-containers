@@ -1,19 +1,20 @@
 # Place at: .github/workflows/build-image.yml
 #
-# Phase 1: build container image(s) only. Nothing is pushed anywhere.
+# Phase 1: build container image(s). Nothing goes to a registry.
+#   - Manual run          -> build only (use it to test a branch)
+#   - Release published   -> build, then attach the image as a .tar.gz to that release
+#   - Plain tag push      -> nothing happens
 # Phase 2 (once you have Entra ID / Azure permissions): see the "PHASE 2" markers.
-#
 
 name: Build container image
 
 on:
-  push:
-    # branches: [build-docker]
-    tags: ["v*.*.*"]
+  workflow_dispatch:
+  release:
+    types: [published]
 
 permissions:
   contents: read
-  # PHASE 2: add "id-token: write" for OIDC login to Azure
 
 concurrency:
   group: build-${{ github.ref }}
@@ -22,6 +23,8 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write   # needed to upload the image to the release
     strategy:
       fail-fast: false
       matrix:
@@ -46,8 +49,6 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      # Tag/label computation. Image name is lowercase repo + matrix name,
-      # e.g. "myorg/mywebapp-frontend". Not pushed yet, only used locally.
       - name: Docker metadata
         id: meta
         uses: docker/metadata-action@v5
@@ -72,11 +73,29 @@ jobs:
           context: ${{ matrix.context }}
           file: ${{ matrix.dockerfile }}
           push: false        # PHASE 2: change to true and prefix images with <acr>.azurecr.io/
-          load: true         # keeps the image in the runner so it can be smoke-tested
+          load: true         # keeps the image in the runner for the steps below
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha,scope=${{ matrix.name }}
           cache-to: type=gha,mode=max,scope=${{ matrix.name }}
+
+      # Only for releases: export the image and attach it to the release.
+      # To use it later: gunzip -c <file> | docker load   (then retag + push to ACR)
+      - name: Export image
+        if: github.event_name == 'release'
+        run: |
+          FILE="${{ matrix.name }}-${{ github.event.release.tag_name }}.tar.gz"
+          docker save $(echo "${{ steps.meta.outputs.tags }}" | tr '\n' ' ') | gzip > "$FILE"
+          ls -lh "$FILE"
+          echo "IMAGE_FILE=$FILE" >> "$GITHUB_ENV"
+
+      - name: Attach image to release
+        if: github.event_name == 'release'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release upload "${{ github.event.release.tag_name }}" "$IMAGE_FILE" \
+            --repo "${{ github.repository }}" --clobber
 
       # PHASE 2: deploy step, e.g.
       # - uses: azure/container-apps-deploy-action@v2
